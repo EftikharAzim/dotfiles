@@ -1,5 +1,20 @@
--- Put this in ~/.hammerspoon/init.lua and Reload Config (menu or Ctrl+Alt+Cmd+R)
+-- ============================================
+-- HAMMERSPOON FFM: Focus Follows Mouse
+-- Conservative optimization - preserves original behavior
+-- ============================================
 
+-- ============================================
+-- CONFIGURATION
+-- ============================================
+local CONFIG = {
+    debounceSeconds = 0.06,
+    pollInterval = 0.25,
+    debugConsole = true,
+}
+
+-- ============================================
+-- IMPORTS (aliased for readability)
+-- ============================================
 local mouse    = hs.mouse
 local window   = hs.window
 local screen   = hs.screen
@@ -9,22 +24,25 @@ local alert    = hs.alert
 local hotkey   = hs.hotkey
 local log      = hs.printf
 
--- Config
-local DEBOUNCE_SECONDS = 0.06   -- how long to wait before focusing after crossing (tweakable)
-local POLL_INTERVAL     = 0.25   -- fallback poll interval (keeps it robust)
-local DEBUG_CONSOLE_MSG = true   -- set false to silence console logs
+-- ============================================
+-- STATE
+-- ============================================
+local state = {
+    enabled = true,
+    lastScreen = mouse.absolutePosition() and mouse.getCurrentScreen() or nil,
+    focusTimer = nil,
+}
 
--- internal state
-local enabled = true
-local lastScreen = mouse.absolutePosition() and mouse.getCurrentScreen() or nil
-local focusTimer = nil
+-- ============================================
+-- UTILITY FUNCTIONS
+-- ============================================
 
--- helper: safe screen id string (nil-safe)
+-- Safe screen identifier (handles nil)
 local function screenId(s)
     return s and (s:id() or tostring(s)) or "nil"
 end
 
--- helper: is a window a candidate to focus?
+-- Check if window is a valid focus candidate
 local function isCandidate(w)
     if not w then return false end
     if not w:isVisible() then return false end
@@ -33,7 +51,7 @@ local function isCandidate(w)
     return true
 end
 
--- helper: point-in-rect using numeric fields (robust)
+-- Point-in-rectangle collision detection
 local function pointInRect(pt, rect)
     if not (pt and rect) then return false end
     local x, y = pt.x or pt[1], pt.y or pt[2]
@@ -42,7 +60,11 @@ local function pointInRect(pt, rect)
     return x >= rx and x <= (rx + rw) and y >= ry and y <= (ry + rh)
 end
 
--- find the topmost window on 'sc' that contains the point (pt)
+-- ============================================
+-- WINDOW MANAGEMENT
+-- ============================================
+
+-- Find topmost window under cursor on given screen
 local function windowUnderPointOnScreen(pt, sc)
     if not (pt and sc) then return nil end
     for _, w in ipairs(window.orderedWindows()) do
@@ -56,91 +78,136 @@ local function windowUnderPointOnScreen(pt, sc)
     return nil
 end
 
--- focus logic: try under-cursor window, else focus first visible standard window on screen
+-- Focus window on screen (try under cursor, else first visible)
 local function focusWindowOnScreen(sc)
     if not sc then
-        if DEBUG_CONSOLE_MSG then log("focusWindowOnScreen: no screen") end
+        if CONFIG.debugConsole then 
+            log("focusWindowOnScreen: no screen") 
+        end
         return false
     end
 
     local pt = mouse.absolutePosition()
     local w = windowUnderPointOnScreen(pt, sc)
+    
     if w then
-        if DEBUG_CONSOLE_MSG then log(string.format("Focusing window under cursor: %s (%s)", tostring(w:title()), tostring(w:application():name()))) end
+        if CONFIG.debugConsole then 
+            log(string.format("Focusing window under cursor: %s (%s)", 
+                tostring(w:title()), tostring(w:application():name()))) 
+        end
         w:focus()
         return true
     end
 
+    -- Fallback: focus first visible standard window
     for _, w2 in ipairs(window.orderedWindows()) do
         if isCandidate(w2) and w2:screen() == sc then
-            if DEBUG_CONSOLE_MSG then log(string.format("Fallback focus: %s (%s)", tostring(w2:title()), tostring(w2:application():name()))) end
+            if CONFIG.debugConsole then 
+                log(string.format("Fallback focus: %s (%s)", 
+                    tostring(w2:title()), tostring(w2:application():name()))) 
+            end
             w2:focus()
             return true
         end
     end
 
-    if DEBUG_CONSOLE_MSG then log("No candidate window found on screen " .. screenId(sc)) end
+    if CONFIG.debugConsole then 
+        log("No candidate window found on screen " .. screenId(sc)) 
+    end
     return false
 end
 
--- debounce wrapper
+-- Debounced focus with timer
 local function scheduleFocus(sc)
-    if focusTimer then
-        focusTimer:stop()
-        focusTimer = nil
+    if state.focusTimer then
+        state.focusTimer:stop()
+        state.focusTimer = nil
     end
-    focusTimer = timer.doAfter(DEBOUNCE_SECONDS, function()
+    state.focusTimer = timer.doAfter(CONFIG.debounceSeconds, function()
         focusWindowOnScreen(sc)
-        focusTimer = nil
+        state.focusTimer = nil
     end)
 end
 
--- eventtap mouse-move watcher
+-- ============================================
+-- EVENT WATCHERS
+-- ============================================
+
+-- Mouse movement watcher
 local mouseWatcher = eventtap.new({ eventtap.event.types.mouseMoved }, function(e)
-    if not enabled then return false end
+    if not state.enabled then return false end
     local cur = mouse.getCurrentScreen()
-    if cur and lastScreen and cur:id() ~= lastScreen:id() then
-        if DEBUG_CONSOLE_MSG then log(string.format("Screen change detected (event): %s -> %s", screenId(lastScreen), screenId(cur))) end
-        lastScreen = cur
+    if cur and state.lastScreen and cur:id() ~= state.lastScreen:id() then
+        if CONFIG.debugConsole then 
+            log(string.format("Screen change detected (event): %s -> %s", 
+                screenId(state.lastScreen), screenId(cur))) 
+        end
+        state.lastScreen = cur
         scheduleFocus(cur)
     end
     return false
 end)
 
--- poll fallback: ensures we catch cases where mouseMoved events might not trigger
-local pollTimer = timer.new(POLL_INTERVAL, function()
-    if not enabled then return end
+-- Polling fallback (catches edge cases)
+local pollTimer = timer.new(CONFIG.pollInterval, function()
+    if not state.enabled then return end
     local cur = mouse.getCurrentScreen()
-    if cur and lastScreen and cur:id() ~= lastScreen:id() then
-        if DEBUG_CONSOLE_MSG then log(string.format("Screen change detected (poll): %s -> %s", screenId(lastScreen), screenId(cur))) end
-        lastScreen = cur
+    if cur and state.lastScreen and cur:id() ~= state.lastScreen:id() then
+        if CONFIG.debugConsole then 
+            log(string.format("Screen change detected (poll): %s -> %s", 
+                screenId(state.lastScreen), screenId(cur))) 
+        end
+        state.lastScreen = cur
         scheduleFocus(cur)
     end
 end)
 
--- toggle function & hotkey
+-- ============================================
+-- CONTROL
+-- ============================================
+
+-- Enable/disable FFM system
 local function setEnabled(v)
-    enabled = v
-    if enabled then
+    state.enabled = v
+    if state.enabled then
         mouseWatcher:start()
         pollTimer:start()
         alert.show("FFM → ON")
-        if DEBUG_CONSOLE_MSG then log("FFM enabled") end
+        if CONFIG.debugConsole then log("FFM enabled") end
     else
         mouseWatcher:stop()
         pollTimer:stop()
-        if focusTimer then focusTimer:stop(); focusTimer = nil end
+        if state.focusTimer then 
+            state.focusTimer:stop()
+            state.focusTimer = nil 
+        end
         alert.show("FFM → OFF")
-        if DEBUG_CONSOLE_MSG then log("FFM disabled") end
+        if CONFIG.debugConsole then log("FFM disabled") end
     end
 end
 
--- start up
+-- ============================================
+-- INITIALIZATION
+-- ============================================
+
+-- Start watchers
 mouseWatcher:start()
 pollTimer:start()
 alert.show("FFM (monitor→focus) loaded")
-if DEBUG_CONSOLE_MSG then log("FFM loaded; lastScreen = " .. screenId(lastScreen)) end
+if CONFIG.debugConsole then 
+    log("FFM loaded; lastScreen = " .. screenId(state.lastScreen)) 
+end
 
--- hotkeys
-hotkey.bind({"ctrl", "alt", "cmd"}, "R", function() hs.reload() end)       -- reload config
-hotkey.bind({"ctrl", "alt", "cmd"}, "T", function() setEnabled(not enabled) end) -- toggle with Ctrl+Alt+Cmd+T
+-- ============================================
+-- HOTKEYS
+-- ============================================
+
+-- Reload config
+hotkey.bind({"ctrl", "alt", "cmd"}, "R", function() 
+    hs.reload() 
+end)
+
+-- Toggle FFM
+hotkey.bind({"ctrl", "alt", "cmd"}, "T", function() 
+    setEnabled(not state.enabled) 
+end)
