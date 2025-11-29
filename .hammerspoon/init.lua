@@ -12,6 +12,7 @@ local CONFIG = {
     debugConsole = true,
     showAlerts = false,
     maxScreenMemory = 5,             -- Limit focus memory to prevent unbounded growth
+    dragDebounceSeconds = 0.3,       -- Wait after drag before focusing
     excludeApps = {
         "System Preferences",
         -- "System Settings",
@@ -45,6 +46,8 @@ local state = {
     screenWatcher = nil,
     windowFilter = nil,              -- Single filter instance (reused)
     lastFocusedWindow = {},          -- {[screenId] = window}
+    isDragging = false,              -- Track if currently dragging
+    dragEndTimer = nil,              -- Timer for drag end detection
 }
 
 -- ============================================
@@ -166,7 +169,7 @@ local function windowUnderPointOnScreen(pt, sc)
 end
 
 -- Focus window on screen (with per-screen focus memory and fullscreen protection)
-local function focusWindowOnScreen(sc)
+local function focusWindowOnScreen(sc, prioritizeCursor)
     if not sc then
         if CONFIG.debugConsole then 
             log("focusWindowOnScreen: no screen") 
@@ -186,7 +189,24 @@ local function focusWindowOnScreen(sc)
     local scId = screenId(sc)
     local pt = mouse.absolutePosition()
     
-    -- PRIORITY 1: Try to restore last focused window on this screen
+    -- PRIORITY 1: If prioritizing cursor (e.g., after drag), focus window under cursor first
+    if prioritizeCursor then
+        local w = windowUnderPointOnScreen(pt, sc)
+        if w then
+            if CONFIG.debugConsole then 
+                log(string.format("Focusing dragged window under cursor: %s (%s)", 
+                    tostring(w:title()), tostring(w:application():name()))) 
+            end
+            if CONFIG.showAlerts then
+                alert.show("🎯 " .. w:application():name(), 0.5)
+            end
+            w:focus()
+            rememberWindow(scId, w)
+            return true
+        end
+    end
+    
+    -- PRIORITY 2: Try to restore last focused window on this screen
     local lastWin = state.lastFocusedWindow[scId]
     if lastWin and isValidWindow(lastWin) and lastWin:screen() == sc then
         if CONFIG.debugConsole then 
@@ -206,7 +226,7 @@ local function focusWindowOnScreen(sc)
         end
     end
     
-    -- PRIORITY 2: Find window under cursor
+    -- PRIORITY 3: Find window under cursor
     local w = windowUnderPointOnScreen(pt, sc)
     if w then
         if CONFIG.debugConsole then 
@@ -221,7 +241,7 @@ local function focusWindowOnScreen(sc)
         return true
     end
 
-    -- PRIORITY 3: Fallback to first visible window
+    -- PRIORITY 4: Fallback to first visible window
     local validWindows = getValidWindowsOnScreen(sc)
     if #validWindows > 0 then
         local w2 = validWindows[1]
@@ -244,28 +264,62 @@ local function focusWindowOnScreen(sc)
 end
 
 -- Debounced focus with timer
-local function scheduleFocus(sc)
+local function scheduleFocus(sc, prioritizeCursor)
     if state.focusTimer then
         state.focusTimer:stop()
     end
     
     state.focusTimer = timer.doAfter(CONFIG.debounceSeconds, function()
         if state.enabled then
-            focusWindowOnScreen(sc)
+            focusWindowOnScreen(sc, prioritizeCursor)
         end
         state.focusTimer = nil
     end)
 end
 
 -- Handle screen change
-local function handleScreenChange(cur, source)
+local function handleScreenChange(cur, source, isDragEvent)
     if cur and not screensEqual(cur, state.lastScreen) then
         if CONFIG.debugConsole then 
-            log(string.format("Screen change detected (%s): %s -> %s", 
-                source, screenId(state.lastScreen), screenId(cur))) 
+            log(string.format("Screen change detected (%s%s): %s -> %s", 
+                source, isDragEvent and ", drag" or "", 
+                screenId(state.lastScreen), screenId(cur))) 
         end
         state.lastScreen = cur
-        scheduleFocus(cur)
+        
+        -- If drag event, mark as dragging and schedule with cursor priority
+        if isDragEvent then
+            state.isDragging = true
+            -- Don't focus immediately during drag
+            return
+        end
+        
+        scheduleFocus(cur, false)
+    end
+end
+
+-- Handle drag end
+local function onDragEnd()
+    if state.isDragging then
+        if CONFIG.debugConsole then
+            log("Drag ended, focusing window under cursor")
+        end
+        
+        state.isDragging = false
+        local cur = mouse.getCurrentScreen()
+        
+        -- Use longer debounce for drag to let window settle
+        if state.focusTimer then
+            state.focusTimer:stop()
+        end
+        
+        state.focusTimer = timer.doAfter(CONFIG.dragDebounceSeconds, function()
+            if state.enabled then
+                -- Prioritize cursor (the dragged window)
+                focusWindowOnScreen(cur, true)
+            end
+            state.focusTimer = nil
+        end)
     end
 end
 
@@ -278,11 +332,35 @@ local function createMouseWatcher()
     return eventtap.new({ 
         eventtap.event.types.mouseMoved,
         eventtap.event.types.leftMouseDragged,
-        eventtap.event.types.rightMouseDragged
+        eventtap.event.types.rightMouseDragged,
+        eventtap.event.types.leftMouseUp,
+        eventtap.event.types.rightMouseUp
     }, function(e)
         if not state.enabled then return false end
+        
+        local eventType = e:getType()
         local cur = mouse.getCurrentScreen()
-        handleScreenChange(cur, "event")
+        
+        -- Detect drag events
+        if eventType == eventtap.event.types.leftMouseDragged or 
+           eventType == eventtap.event.types.rightMouseDragged then
+            handleScreenChange(cur, "event", true)
+        -- Detect drag end
+        elseif eventType == eventtap.event.types.leftMouseUp or 
+               eventType == eventtap.event.types.rightMouseUp then
+            -- Reset drag end timer
+            if state.dragEndTimer then
+                state.dragEndTimer:stop()
+            end
+            state.dragEndTimer = timer.doAfter(0.1, function()
+                onDragEnd()
+                state.dragEndTimer = nil
+            end)
+        -- Normal mouse movement
+        else
+            handleScreenChange(cur, "event", false)
+        end
+        
         return false
     end)
 end
@@ -291,8 +369,9 @@ end
 local function createPollTimer()
     return timer.new(CONFIG.pollInterval, function()
         if not state.enabled then return end
+        if state.isDragging then return end  -- Skip during drag
         local cur = mouse.getCurrentScreen()
-        handleScreenChange(cur, "poll")
+        handleScreenChange(cur, "poll", false)
     end)
 end
 
@@ -304,7 +383,7 @@ local function createScreenWatcher()
         end
         state.lastScreen = mouse.getCurrentScreen()
         if state.lastScreen then
-            scheduleFocus(state.lastScreen)
+            scheduleFocus(state.lastScreen, false)
         end
     end)
 end
@@ -353,9 +432,14 @@ local function cleanup()
         state.focusTimer:stop() 
         state.focusTimer = nil
     end
+    if state.dragEndTimer then
+        state.dragEndTimer:stop()
+        state.dragEndTimer = nil
+    end
     
     -- Clear focus memory to free memory
     state.lastFocusedWindow = {}
+    state.isDragging = false
     
     if CONFIG.debugConsole then 
         log("FFM cleanup complete") 
@@ -406,6 +490,11 @@ local function setEnabled(v)
             state.focusTimer:stop()
             state.focusTimer = nil 
         end
+        if state.dragEndTimer then
+            state.dragEndTimer:stop()
+            state.dragEndTimer = nil
+        end
+        state.isDragging = false
         alert.show("FFM → OFF", 1)
         if CONFIG.debugConsole then log("FFM disabled") end
     end
@@ -439,11 +528,12 @@ hotkey.bind({"ctrl", "alt", "cmd"}, "D", function()
     for _ in pairs(state.lastFocusedWindow) do memCount = memCount + 1 end
     
     local msg = string.format(
-        "FFM State:\nEnabled: %s\nCurrent Screen: %s\nLast Screen: %s\nMemory: %d screens",
+        "FFM State:\nEnabled: %s\nCurrent Screen: %s\nLast Screen: %s\nMemory: %d screens\nDragging: %s",
         tostring(state.enabled),
         screenId(cur),
         screenId(state.lastScreen),
-        memCount
+        memCount,
+        tostring(state.isDragging)
     )
     alert.show(msg, 3)
     log(msg)
