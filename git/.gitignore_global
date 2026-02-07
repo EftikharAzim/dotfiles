@@ -1,0 +1,60 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+Thumbs.db
+ehthumbs.db
+
+# IDE / Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+
+# Logs
+*.log
+logs/
+
+# Environment files (be careful with secrets)
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+venv/
+.venv/
+
+# Go
+vendor/
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+
+# Misc
+*.bak
+*.tmp
+*.temp

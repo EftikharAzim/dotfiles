@@ -44,9 +44,17 @@ MAX_AGE_DAYS=30            # Delete caches/logs older than this
 XCODE_MAX_AGE_DAYS=14      # DerivedData age threshold
 SAFE_TRASH=true            # Move to Trash instead of rm -rf
 SHOW_SIZE_REPORT=true      # Display space reclaimed
+ENABLE_LOGGING=true        # Set to false with --no-log flag
 
-# Logging
-LOGFILE="$HOME/mac_cleaner_$(date +%Y%m%d_%H%M%S).log"
+# Logging - use proper macOS Logs directory
+LOG_DIR="$HOME/Library/Logs/mac_cleanup"
+LOG_RETENTION_DAYS=3          # Auto-delete logs older than this
+mkdir -p "$LOG_DIR" 2>/dev/null
+LOGFILE="$LOG_DIR/cleanup_$(date +%Y%m%d_%H%M%S).log"
+
+# Log rotation - delete old logs
+find "$LOG_DIR" -name "cleanup_*.log" -mtime +$LOG_RETENTION_DAYS -delete 2>/dev/null || true
+
 TEMP_DIR=""  # Will be set securely below
 
 # Color output (if terminal supports it)
@@ -66,7 +74,11 @@ fi
 
 # Print and log messages
 log() {
-  echo -e "$1" | tee -a "$LOGFILE"
+  if [ "$ENABLE_LOGGING" = true ]; then
+    echo -e "$1" | tee -a "$LOGFILE"
+  else
+    echo -e "$1"
+  fi
 }
 
 log_header() {
@@ -208,9 +220,11 @@ TEMP_DIR=$(mktemp -d -t mac_cleaner.XXXXXXXXXX) || {
 }
 trap 'rm -rf "$TEMP_DIR"' EXIT  # Cleanup on exit
 
-# Set restrictive permissions on logfile
-touch "$LOGFILE"
-chmod 600 "$LOGFILE"
+# Set restrictive permissions on logfile (only if logging enabled)
+if [ "$ENABLE_LOGGING" = true ]; then
+  touch "$LOGFILE"
+  chmod 600 "$LOGFILE"
+fi
 
 ################################################################################
 # ARGUMENT PARSING
@@ -226,6 +240,7 @@ USAGE:
 OPTIONS:
   --apply         Execute cleanup (default is dry-run preview)
   --aggressive    Enable aggressive cleanup (Docker prune, full caches)
+  --no-log        Skip log file creation (output to terminal only)
   --help, -h      Show this help message
 
 EXAMPLES:
@@ -261,7 +276,8 @@ SAFETY:
   - Interactive confirmations for destructive ops
 
 LOGFILE:
-  ~/mac_cleaner_TIMESTAMP.log
+  ~/Library/Logs/mac_cleanup/cleanup_TIMESTAMP.log
+  (use --no-log to skip logging)
 
 EOF
 }
@@ -274,6 +290,9 @@ for arg in "$@"; do
       ;;
     --aggressive)
       AGGRESSIVE=true
+      ;;
+    --no-log)
+      ENABLE_LOGGING=false
       ;;
     --help|-h)
       show_help

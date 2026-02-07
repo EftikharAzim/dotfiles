@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.mac-cleanup</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>
+            DOTFILES="$HOME/MyPlayground/dotfiles"
+            LOG="$HOME/Library/Logs/mac_cleanup_weekly.log"
+            
+            echo "=== Weekly Cleanup Report: $(date) ===" >> "$LOG"
+            
+            # Run dry-run cleanup and capture output
+            OUTPUT=$("$DOTFILES/scripts/mac_cleanup.sh" 2>&amp;1)
+            echo "$OUTPUT" >> "$LOG"
+            
+            # Extract key info for notification
+            RECLAIMED=$(echo "$OUTPUT" | grep -o "Total space reclaimed: [^ ]*" | head -1)
+            
+            # Send macOS notification
+            osascript -e "display notification \"$RECLAIMED. Run 'mac_cleanup --apply' to clean.\" with title \"Weekly Cleanup Report\" sound name \"default\""
+        </string>
+    </array>
+    
+    <!-- Run every Sunday at 10:00 AM -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>10</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    
+    <key>StandardOutPath</key>
+    <string>/tmp/mac_cleanup.stdout</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/tmp/mac_cleanup.stderr</string>
+    
+    <!-- Don't run if machine was asleep -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

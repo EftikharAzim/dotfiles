@@ -1,0 +1,76 @@
+[user]
+    name = Eftikhar Azim
+    email = eftikharazim.107308@gmail.com
+
+[init]
+    defaultBranch = main
+
+[core]
+    editor = code --wait
+    excludesFile = ~/.gitignore_global
+    autocrlf = input
+    pager = less -FRX
+
+[pull]
+    rebase = true
+
+[push]
+    default = current
+    autoSetupRemote = true
+
+[fetch]
+    prune = true
+
+[diff]
+    colorMoved = zebra
+
+[merge]
+    conflictStyle = diff3
+
+[rerere]
+    enabled = true
+
+# Aliases - common shortcuts
+[alias]
+    # Status and logging
+    s = status -sb
+    l = log --oneline -15
+    lg = log --graph --oneline --decorate -15
+    ll = log --graph --pretty=format:'%C(yellow)%h%Creset -%C(auto)%d%Creset %s %C(dim)(%cr) %C(cyan)<%an>%Creset' -15
+    
+    # Branching
+    br = branch
+    co = checkout
+    sw = switch
+    new = switch -c
+    
+    # Staging and committing
+    a = add
+    aa = add --all
+    cm = commit -m
+    ca = commit --amend --no-edit
+    cam = commit --amend -m
+    
+    # Diff
+    d = diff
+    ds = diff --staged
+    
+    # Undo helpers
+    unstage = restore --staged
+    undo = reset HEAD~1 --mixed
+    discard = checkout --
+    
+    # Remote
+    p = push
+    pf = push --force-with-lease
+    pl = pull
+    
+    # Stash
+    st = stash
+    stp = stash pop
+    stl = stash list
+    
+    # Utility
+    last = log -1 HEAD --stat
+    contributors = shortlog -sn
+    aliases = config --get-regexp alias

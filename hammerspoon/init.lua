@@ -9,16 +9,19 @@
 local CONFIG = {
     debounceSeconds = 0.06,
     pollInterval = 2.0,              -- Reduced to 2s for battery savings (was 1.0)
-    debugConsole = true,
+    debugConsole = false,            -- Set to true for troubleshooting
     showAlerts = false,
     maxScreenMemory = 5,             -- Limit focus memory to prevent unbounded growth
     dragDebounceSeconds = 0.3,       -- Wait after drag before focusing
+    clickCooldownSeconds = 0.4,      -- Ignore FFM briefly after mouse click
     excludeApps = {
         "System Preferences",
-        -- "System Settings",
+        "System Settings",
         "Alfred",
         "Raycast",
         "Spotlight",
+        "Notification Center",
+        "Control Center",
     }
 }
 
@@ -48,6 +51,7 @@ local state = {
     lastFocusedWindow = {},          -- {[screenId] = window}
     isDragging = false,              -- Track if currently dragging
     dragEndTimer = nil,              -- Timer for drag end detection
+    lastClickTime = 0,               -- Track last click for cooldown
 }
 
 -- ============================================
@@ -200,6 +204,8 @@ local function focusWindowOnScreen(sc, prioritizeCursor)
             if CONFIG.showAlerts then
                 alert.show("🎯 " .. w:application():name(), 0.5)
             end
+            -- Raise window first to preserve z-order, then focus
+            w:raise()
             w:focus()
             rememberWindow(scId, w)
             return true
@@ -216,6 +222,8 @@ local function focusWindowOnScreen(sc, prioritizeCursor)
         if CONFIG.showAlerts then
             alert.show("↻ " .. lastWin:application():name(), 0.5)
         end
+        -- Raise window first to preserve z-order, then focus
+        lastWin:raise()
         lastWin:focus()
         return true
     elseif lastWin then
@@ -236,6 +244,8 @@ local function focusWindowOnScreen(sc, prioritizeCursor)
         if CONFIG.showAlerts then
             alert.show(w:application():name(), 0.5)
         end
+        -- Raise window first to preserve z-order, then focus
+        w:raise()
         w:focus()
         rememberWindow(scId, w)
         return true
@@ -252,6 +262,8 @@ local function focusWindowOnScreen(sc, prioritizeCursor)
         if CONFIG.showAlerts then
             alert.show(w2:application():name(), 0.5)
         end
+        -- Raise window first to preserve z-order, then focus
+        w2:raise()
         w2:focus()
         rememberWindow(scId, w2)
         return true
@@ -279,6 +291,15 @@ end
 
 -- Handle screen change
 local function handleScreenChange(cur, source, isDragEvent)
+    -- Skip if recent click (user is intentionally clicking)
+    local now = timer.secondsSinceEpoch()
+    if (now - state.lastClickTime) < CONFIG.clickCooldownSeconds then
+        if CONFIG.debugConsole then
+            log("Skipping FFM - click cooldown active")
+        end
+        return
+    end
+    
     if cur and not screensEqual(cur, state.lastScreen) then
         if CONFIG.debugConsole then 
             log(string.format("Screen change detected (%s%s): %s -> %s", 
@@ -331,6 +352,7 @@ end
 local function createMouseWatcher()
     return eventtap.new({ 
         eventtap.event.types.mouseMoved,
+        eventtap.event.types.leftMouseDown,  -- Track clicks for cooldown
         eventtap.event.types.leftMouseDragged,
         eventtap.event.types.rightMouseDragged,
         eventtap.event.types.leftMouseUp,
@@ -340,6 +362,12 @@ local function createMouseWatcher()
         
         local eventType = e:getType()
         local cur = mouse.getCurrentScreen()
+        
+        -- Track click time for cooldown
+        if eventType == eventtap.event.types.leftMouseDown then
+            state.lastClickTime = timer.secondsSinceEpoch()
+            return false  -- Don't block the click
+        end
         
         -- Detect drag events
         if eventType == eventtap.event.types.leftMouseDragged or 
